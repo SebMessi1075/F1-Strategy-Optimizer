@@ -1,0 +1,48 @@
+{
+  "timestamp": "20260125_174433",
+  "features": [
+    "lap",
+    "tyre_age",
+    "compound_encoded",
+    "track_temperature",
+    "fuel_load",
+    "track_id",
+    "tyre_age_squared",
+    "tyre_age_log",
+    "race_progress",
+    "is_soft",
+    "is_medium",
+    "is_hard",
+    "temp_normalized",
+    "tyre_age_x_compound",
+    "temp_x_compound",
+    "fuel_x_tyre_age"
+  ],
+  "metrics": {
+    "Train RMSE": 5.126186051893329,
+    "Test RMSE": 6.005305409389664,
+    "Train MAE": 3.049343374228138,
+    "Test MAE": 3.5452716849265786,
+    "Train R\u00b2": 0.6194637900803023,
+    "Test R\u00b2": 0.44604555677207003
+  },
+  "config": {
+    "n_estimators": 500,
+    "max_depth": 7,
+    "learning_rate": 0.03,
+    "subsample": 0.85,
+    "colsample_bytree": 0.85,
+    "min_child_weight": 3,
+    "gamma": 0.1,
+    "reg_alpha": 0.1,
+    "reg_lambda": 1.0,
+    "objective": "reg:squarederror",
+    "random_state": 42,
+    "n_jobs": -1,
+    "tree_method": "hist"
+  },
+  "data_shape": [
+    29087,
+    7
+  ]
+}
