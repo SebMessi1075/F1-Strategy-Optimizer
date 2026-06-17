@@ -159,13 +159,34 @@ f1opt/
     conditions.py        correct safety-car physics (laps slower, pit loss cheaper)
     simulator.py         deterministic + Monte-Carlo race simulation
     optimizer.py         FIA-legal search + MC re-rank + undercut/overcut
-app.py                   Streamlit UI
+api.py                   FastAPI backend — exposes /optimise, /health endpoints
+app.py                   Streamlit UI (legacy; Next.js frontend is now primary)
 tests/test_engine.py     locks in the fixes
+
+web/                     Next.js frontend
+  src/components/
+    Hero.tsx               recommended strategy, MC time band, stint visualisation
+    TheRoadNotTaken.tsx    ranked alternatives + side-by-side strategy comparison
+    WhatItBuysYou.tsx      cumulative time saved vs naive baseline
+    ThePlan.tsx            model card (CV MAE, R², data provenance)
+    ConfigDrawer.tsx       race/circuit configuration panel
 
 data/raw/                your existing Ergast CSVs (inputs)
 data/pace_dataset.parquet  generated dataset (gitignored)
 models/                  trained artifacts: pace_model.pkl, tyre_model.json, +json
 ```
+
+## Web UI
+
+The Next.js frontend (`web/`) presents the optimizer output across several sections:
+
+- **Hero** — recommended strategy with Monte-Carlo time band and stint visualisation.
+- **What It Buys You** — cumulative time comparison vs a naive baseline.
+- **The Road Not Taken** — ranked alternative strategies with three interactive features:
+  - **Compare toggle** on each row: select any two strategies to open a side-by-side panel showing compound sequence, per-stint breakdown (compound, start lap, end lap, lap count), total time, stop count, and delta vs optimal. Selecting a third strategy automatically drops the oldest.
+  - **Undercut check** — per-stop undercut/overcut delta coloured green (saves time) or red (costs time); neutral grey for a zero delta.
+  - The recommended strategy is labelled *chosen* in the ranked list and *Recommended* in the comparison panel.
+- **Model card** — CV MAE, R², training data provenance.
 
 ## What's intentionally *not* modelled
 
