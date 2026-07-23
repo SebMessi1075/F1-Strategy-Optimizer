@@ -1,187 +1,227 @@
-# F1 Strategy Optimizer
+<div align="center">
 
-## Running locally
+# PITWALL
 
-**Prerequisites:** Python 3.10+, Node.js 18+
+**Formula 1 race strategy, decided by a model trained on 215,000 real laps.**
 
-```bash
-# 1. Install Python dependencies
-pip install -r requirements.txt
+Every legal pit strategy, simulated and ranked by expected finishing time under safety car uncertainty.
 
-# 2. Build the dataset (offline, uses bundled Ergast CSVs)
-python -m f1opt.data.build_dataset
+[**Live demo**](https://f1-strategy-optimizer.vercel.app) · [API](https://pitwall-h25o.onrender.com/health) · [Model card](#model-card)
 
-# 3. Train models
-python -m f1opt.model.pace_model
-python -m f1opt.model.tyre_model
+![Python](https://img.shields.io/badge/Python-3.10+-1f2937?logo=python&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-1.8-1f2937?logo=scikitlearn&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-11%20passing-3B7A57)
 
-# 4. Start the FastAPI backend (port 8000)
-uvicorn api:app --reload --port 8000
-
-# 5. In a separate terminal, start the Next.js frontend
-cd web
-npm install
-npm run dev           # → http://localhost:3000
-
-# 6. Run the test suite
-pytest -q             # should pass 11 tests
-```
+</div>
 
 ---
 
-## Deploy
+## The problem
 
-### Frontend — Vercel
+A Formula 1 car loses roughly a tenth of a second per lap as its tyres wear. Fitting
+fresh ones costs about 22 seconds in the pit lane. Three compounds trade outright
+pace against durability, the regulations require at least two of them in a dry race,
+and a safety car can appear at any lap and make a pit stop half price.
 
-1. Import the repo into [Vercel](https://vercel.com).
-2. Set the **Root Directory** to `web/`.
-3. Add environment variable: `NEXT_PUBLIC_API_URL=https://<your-api-url>`.
-4. Deploy — Vercel auto-detects Next.js.
+So the question is a constrained scheduling problem under uncertainty: **when do you
+stop, what do you fit, and how do you plan for an event you cannot predict?**
 
-### API — Render or Fly.io
-
-**Render (free tier):**
-1. New Web Service → connect this repo.
-2. Build command: `pip install -r requirements.txt`
-3. Start command: `uvicorn api:app --host 0.0.0.0 --port $PORT`
-4. The `/health` endpoint confirms the service is live.
-
-**Fly.io:**
-```bash
-fly launch            # follow prompts, choose Python runtime
-fly deploy
-```
-Set `PORT` to `8080` and use the same start command above.
-
-> The `data/pace_dataset.parquet` and trained model files in `models/` must be
-> present at deploy time — commit them (they are not gitignored except the
-> parquet) or bundle them in the build step.
-
----
-
-Pit-strategy optimisation built on a lap-time model trained on **real** race
-data, and judged on its **expected** outcome under safety-car uncertainty —
-not a single deterministic guess.
-
-```
-Recommended: SOFT → (L16) SOFT → (L32) MEDIUM
-  deterministic 81.83 min · MC expected 83.73 min · risk band p10–p90 ≈ 4.1 min
-```
+PITWALL answers it end to end, from raw historical lap times to a deployed interface.
 
 ---
 
 ## How it works
 
-The lap time of any lap is composed from two clearly-separated pieces, so
-nothing is a black box and the two layers never double-count:
+Lap time is composed from two deliberately separated layers, so nothing is a black box
+and neither layer double counts the other:
 
 ```
-lap_time = base_pace(circuit, fuel, temp, year)      ← learned from real laps
-         + tyre_delta(compound, tyre_age, temp)       ← physical / calibrated
-         × track_status_multiplier(green / VSC / SC)  ← correct SC physics
+lap_time  =  base_pace(circuit, fuel_load, temperature)     ← learned from real laps
+          +  tyre_delta(compound, tyre_age, temperature)    ← physical, calibratable
+          ×  track_status(green | VSC | safety car)         ← race conditions
 ```
 
-- **Base pace** is a gradient-boosted model trained on ~215k clean green-flag
-  laps from the Ergast dataset (2014–2024). It captures circuit pace, the
-  fuel-burn trend (cars get ~1.9 s/lap faster as the tank empties — a real,
-  measured effect) and temperature.
-  Held-out **race-weekend** cross-validation: **MAE ≈ 2.6 s, R² ≈ 0.85**.
-  (The split holds out whole race weekends, so the score reflects predicting a
-  race the model hasn't seen on a circuit it knows — which is how the optimiser
-  is actually used.)
+**Base pace** is a gradient boosted model trained on ~215,000 clean green flag laps
+(2014 to 2024, 32 circuits). It learns circuit pace, temperature, and the fuel burn
+trend, recovering a ~1.9 s/lap gain from full tank to empty purely from the data.
 
-- **Tyre layer** owns all compound and degradation behaviour: a transparent
-  Pirelli-style model (per-compound fresh offset, linear wear, and a cliff once
-  the tyre ages out), with temperature scaling. It produces the realistic
-  soft-fast-then-cliffs / hard-slow-but-durable crossover that makes strategy a
-  real decision. Ergast has **no** compound data, so by default this is a
-  physical prior; the FastF1 pipeline below replaces it with wear rates
-  *learned from real per-compound laps*.
+**Tyre degradation** is a transparent physical model: each compound has a fresh pace
+offset, a linear wear rate, and a cliff once it ages past a threshold, all scaled by
+track temperature. The historical dataset contains no tyre compound labels, so rather
+than fabricate them this layer stays an explicit, tunable assumption. The included
+FastF1 pipeline replaces it with wear rates learned from real compound data.
 
-- **Strategy search** enumerates the realistic space (1–3 stops, every compound
-  sequence, a grid of pit laps), simulates each through the shared lap-time
-  model, enforces the real **FIA two-compound rule**, then re-ranks the leaders
-  by **Monte-Carlo expected time** over random safety-car scenarios so the
-  recommendation is robust, not lucky. It also reports the **undercut/overcut**
-  pace trade around each stop.
+**Strategy search** enumerates every legal one, two, and three stop plan across all
+compound sequences and a grid of pit laps, simulates each through the shared lap time
+model, enforces the two compound rule, then ranks the leaders by Monte Carlo expected
+time across 200 randomised safety car scenarios.
 
-## The data story (read this)
+**Reactive policy.** A passive simulation measures the cost of a safety car but never
+the value of responding to one. Each simulated race therefore uses a one step
+lookahead: when a safety car appears, it simulates finishing the race both ways and
+takes the cheaper. This is provably never worse than ignoring the opportunity, and it
+correctly declines when the timing does not help.
 
-Ergast gives real lap times but **not** tyre compound, tyre age or track
-temperature — which is exactly why the previous version randomised them. This
-rebuild is honest about that line:
+<div align="center">
 
-- **Learned from real data:** circuit base pace, fuel burn, temperature.
-- **Physical prior (calibratable):** compound degradation.
+| Safety car lap | Reaction | Time gained |
+|:--|:--|--:|
+| 2  | none, tyres too fresh | 0.0 s |
+| 10 | pit early | 5.4 s |
+| 26 | pit early | **8.9 s** |
+| 42 | none, stops already done | 0.0 s |
 
-To make degradation *learned* too, run the FastF1 pipeline (2018+ has real
-`Compound` and `TyreLife`). It needs network access and isn't runnable in every
-sandbox, but everything downstream consumes its output unchanged.
+<sub>Silverstone, 52 laps. The value of reacting peaks near a due stop and vanishes at either end of the race.</sub>
 
-## Quickstart
+</div>
 
-```bash
-pip install -r requirements.txt
+---
 
-# 1. Build the dataset from the bundled Ergast dump (offline, fast)
-python -m f1opt.data.build_dataset
+## Model card
 
-# 2. Train + honestly evaluate the base pace model, build the tyre model
-python -m f1opt.model.pace_model
-python -m f1opt.model.tyre_model
+Honest numbers, including where the model is weak.
 
-# 3. Run the app
-streamlit run app.py
+| Metric | Value | How it was measured |
+|:--|:--|:--|
+| R² | **0.845** | 5 fold CV, grouped by race weekend |
+| Mean absolute error | **2.63 s** | same grouped CV |
+| Median error, unseen seasons | **2.0 s** | trained ≤2022, tested on 2023 and 2024 |
+| Training data | 214,993 laps | 32 circuits, 2014 to 2024 |
+| Learned fuel effect | 1.85 s/lap | full tank to empty, recovered from data |
 
-# 4. (optional, recommended) upgrade to REAL tyre data via FastF1 — run locally
-python -m f1opt.data.fastf1_pipeline 2018 2024 --cache .fastf1_cache
-python -m f1opt.model.pace_model      # retrain on the richer data
-python -m f1opt.model.tyre_model      # now LEARNS per-compound wear
+**On the evaluation.** Laps from the same race are near duplicates, so a random train
+test split leaks and flatters the score. Splitting by whole race weekends keeps every
+circuit represented in training while testing only on races the model has never seen,
+which is exactly how the optimiser is used in practice.
 
-# tests
-pytest -q
+**On the failure modes.** Held out season accuracy is strong where history is dense
+(Monza 0.77 s, Silverstone 1.06 s, Bahrain 1.16 s) and degrades where it is not.
+Suzuka is the worst case at ~10 s, because it was not raced in 2020 or 2021 and the
+model has too little history to extrapolate from. Wet races miss badly too, since
+rain is not modelled. The median is the representative figure; the mean is dragged by
+these known cases.
+
+---
+
+## Architecture
+
 ```
-
-## Layout
+Build once                         Every request
+─────────────────────────          ──────────────────────────────
+raw laps                           Next.js frontend  (Vercel)
+   ↓  data pipeline                     ↓  POST /optimise
+clean dataset                      FastAPI service   (Render)
+   ↓  training                          ↓
+pace model + tyre model  ──────→   strategy engine
+(pkl + json artifacts)                 ↓  simulate · search · rank
+                                   ranked strategies + analysis
+```
 
 ```
 f1opt/
-  paths.py             central, repo-relative paths (data/raw in, models/ out)
-  data/
-    build_dataset.py     real Ergast laps -> clean dataset (infers stints) [offline]
-    fastf1_pipeline.py   FastF1 -> dataset w/ real compound, tyre life, temp [network]
-  model/
-    features.py          single source of truth for features (base/tyre split)
-    pace_model.py        learned base-pace model + race-weekend CV
-    tyre_model.py        physical / calibratable compound-degradation layer
-    lap_time.py          composes base + tyre + conditions (the one lap-time fn)
-  strategy/
-    conditions.py        correct safety-car physics (laps slower, pit loss cheaper)
-    simulator.py         deterministic + Monte-Carlo race simulation
-    optimizer.py         FIA-legal search + MC re-rank + undercut/overcut
-app.py                   Streamlit UI
-tests/test_engine.py     locks in the fixes
+├── paths.py                 repo relative paths
+├── data/
+│   ├── build_dataset.py     raw laps → clean training set, offline
+│   └── fastf1_pipeline.py   real compound, tyre life, temperature, needs network
+├── model/
+│   ├── features.py          single source of truth for features
+│   ├── pace_model.py        learned base pace + grouped CV
+│   ├── tyre_model.py        physical degradation, calibratable
+│   └── lap_time.py          composes base + tyre + conditions
+└── strategy/
+    ├── conditions.py        safety car physics
+    ├── simulator.py         deterministic, Monte Carlo, reactive
+    └── optimizer.py         legal search, ranking, undercut analysis
 
-data/raw/                your existing Ergast CSVs (inputs)
-data/pace_dataset.parquet  generated dataset (gitignored)
-models/                  trained artifacts: pace_model.pkl, tyre_model.json, +json
+api.py                       FastAPI service
+web/                         Next.js + TypeScript frontend
+tests/                       11 unit tests
 ```
 
-## What's intentionally *not* modelled
+---
 
-- **Track position / traffic.** This is a single-car pace model, so "undercut"
-  here is the pure pace delta of pitting a lap earlier, not the position you'd
-  gain by jumping a rival in traffic. Multi-car modelling is the natural next step.
-- **Weather changes mid-race** (inters/wets switchovers).
-- **Driver-specific pace** (available from FastF1 — a good future feature).
+## Running locally
 
-## Changes from the previous version
+**Requires** Python 3.10+ and Node.js 18+.
 
-The previous version trained on `np.random` synthetic rows fitted to a hardcoded
-formula, evaluated with a leaky random split, engineered features three
-different (and inconsistent) ways so the optimiser and simulator disagreed, had
-backwards and unused safety-car code, never enforced the two-compound rule, and
-compared against a strawman baseline. This rebuild trains on real laps with a
-grouped split, uses one feature definition everywhere, fixes the safety-car
-physics, enforces the FIA rule, adds Monte-Carlo robustness and undercut
-analysis, and ships tests.
+```bash
+# Backend
+pip install -r requirements.txt
+python -m f1opt.data.build_dataset     # raw laps → dataset
+python -m f1opt.model.pace_model       # train + evaluate
+python -m f1opt.model.tyre_model       # build tyre layer
+uvicorn api:app --reload --port 8000
+
+# Frontend, in a second terminal
+cd web && npm install && npm run dev   # → http://localhost:3000
+```
+
+Trained artifacts are committed, so you can skip straight to `uvicorn` and `npm run dev`.
+
+**Optional, real tyre data.** The bundled dataset has no compound labels. To learn
+real per compound wear rates from timing data (2018+, requires network):
+
+```bash
+python -m f1opt.data.fastf1_pipeline 2018 2024
+python -m f1opt.model.pace_model
+python -m f1opt.model.tyre_model       # now learns, instead of assuming
+```
+
+```bash
+pytest -q                              # 11 tests
+```
+
+---
+
+## API
+
+| Endpoint | Returns |
+|:--|:--|
+| `GET /health` | service status and circuit count |
+| `GET /circuits` | all 32 circuits with typical lap counts |
+| `GET /model-card` | live evaluation metrics |
+| `POST /optimise` | ranked strategies, pace curves, undercut analysis |
+
+```bash
+curl -X POST http://localhost:8000/optimise \
+  -H "Content-Type: application/json" \
+  -d '{"circuit":"silverstone","laps":52,"temp":35,"max_stops":2,"sc_lap":0,"vsc_lap":0}'
+```
+
+---
+
+## Design decisions
+
+**Why gradient boosted trees, not deep learning.** The data is tabular and moderate in
+size, which is exactly where tree ensembles win. It trains in seconds and the fuel and
+temperature effects stay interpretable.
+
+**Why exhaustive search, not a heuristic.** The legal strategy space is small enough to
+evaluate completely, so the result is the true optimum under the model rather than a
+plausible guess, and every recommendation can be explained.
+
+**Why a physical tyre model.** The dataset has no compound labels. Learning degradation
+from it would mean inventing the signal. Keeping that layer explicit draws a clear line
+between what is measured and what is assumed, and gives the FastF1 pipeline something
+concrete to calibrate.
+
+**Why expected time, not fastest time.** A plan that is quickest on paper can be fragile
+to a badly timed safety car. Ranking on expected outcome across simulated scenarios
+prefers strategies that hold up.
+
+---
+
+## Not modelled
+
+Single car pace only, so the undercut figures are pure pace deltas and do not include
+track position gained on rivals. No mid race weather changes, no driver specific pace
+(available from FastF1 and a natural next step), and no traffic or dirty air.
+
+---
+
+<div align="center">
+<sub>Built with real data, evaluated honestly.</sub>
+</div>
