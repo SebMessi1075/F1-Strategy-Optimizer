@@ -11,8 +11,8 @@ async function get<T>(path: string): Promise<T> {
 export const fetchCircuits = () => get<Circuit[]>("/circuits");
 export const fetchModelCard = () => get<ModelCard>("/model-card");
 
-/** Wake the Render free-tier instance before the heavy optimise call. */
-async function warmUp(): Promise<void> {
+/** Wake the Render free-tier instance. Safe to call early and often. */
+export async function warmUp(): Promise<void> {
   try {
     await fetch(`${BASE}/health`, { cache: "no-store" });
   } catch {

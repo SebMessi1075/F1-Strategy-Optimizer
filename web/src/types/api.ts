@@ -5,6 +5,7 @@ export interface Circuit {
   name: string;
   typical_laps: number;
   median_pace: number;
+  gp?: string;
 }
 
 export interface ModelCard {

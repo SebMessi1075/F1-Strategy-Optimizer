@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Hero from "@/components/Hero";
+import PaceBackdrop from "@/components/PaceBackdrop";
 import ThePlan from "@/components/ThePlan";
 import WhatItBuysYou from "@/components/WhatItBuysYou";
 import TheRoadNotTaken from "@/components/TheRoadNotTaken";
 import SiteFooter from "@/components/SiteFooter";
 import ConfigDrawer from "@/components/ConfigDrawer";
-import { fetchCircuits, fetchModelCard, postOptimise } from "@/lib/api";
+import { fetchCircuits, fetchModelCard, postOptimise, warmUp } from "@/lib/api";
+import { CIRCUITS } from "@/data/circuits";
 import type {
   Circuit,
   CircuitGeo,
@@ -26,7 +28,7 @@ interface Config {
 const FIXED_YEAR = 2024;
 
 export default function Page() {
-  const [circuits, setCircuits] = useState<Circuit[]>([]);
+  const [circuits, setCircuits] = useState<Circuit[]>(CIRCUITS);
   const [geoData, setGeoData] = useState<Record<string, CircuitGeo>>({});
   const [modelCard, setModelCard] = useState<ModelCard | null>(null);
   const [selectedSlug, setSelectedSlug] = useState("");
@@ -43,11 +45,17 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Load circuits, model card, and geo data on mount
+  // The circuit list and geometry are static, so the UI is usable immediately.
+  // The API is only needed to run an optimisation, so we wake it in the
+  // background while the user is still choosing.
   useEffect(() => {
-    fetchCircuits().then(cs => {
-      setCircuits(cs);
-    }).catch(() => {});
+    void warmUp();
+
+    // Refresh the list from the API once it is awake, in case the model gained
+    // circuits since this build. Failure is fine, the static list still works.
+    fetchCircuits()
+      .then(cs => { if (cs.length) setCircuits(cs); })
+      .catch(() => {});
 
     fetchModelCard().then(setModelCard).catch(() => {});
 
@@ -148,11 +156,17 @@ export default function Page() {
 
       {/* Results sections */}
       {result && !loading && (
-        <>
-          <ThePlan result={result} circuitPath={circuitPath} />
-          <WhatItBuysYou result={result} />
-          <TheRoadNotTaken result={result} />
-        </>
+        <div className="relative">
+          <PaceBackdrop
+            lapTimes={result.pace_curve.recommended_lap}
+            circuitKey={result.circuit}
+          />
+          <div className="relative" style={{ zIndex: 1 }}>
+            <ThePlan result={result} circuitPath={circuitPath} />
+            <WhatItBuysYou result={result} />
+            <TheRoadNotTaken result={result} />
+          </div>
+        </div>
       )}
 
       {/* Initial call-to-action when no result yet */}
